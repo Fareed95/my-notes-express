@@ -1,15 +1,14 @@
 #!/bin/bash
 
 # ==============================================
-# Setup Script for Notes Express App
+# Complete Setup Script for Notes Express App
 # ==============================================
-# This script automates EVERYTHING:
-#   1. Installs Docker & Docker Compose if missing
-#   2. Installs Node.js & npm if missing
-#   3. Copies .env.example to .env (if needed)
-#   4. Installs npm dependencies
-#   5. Builds and starts the app container
-#   6. Runs the database setup (creates tables)
+# Installs everything on a fresh Ubuntu EC2:
+#   1. System update
+#   2. Docker & Docker Compose
+#   3. Configures .env (RDS credentials)
+#   4. Builds & starts Docker container
+#   5. Runs DB table setup (creates tables on RDS)
 # ==============================================
 
 set -e
@@ -21,21 +20,30 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-echo -e "${CYAN}========================================${NC}"
-echo -e "${CYAN}   Notes Express App - Setup Script     ${NC}"
-echo -e "${CYAN}========================================${NC}"
+APP_PORT=3000
+
+echo -e "${CYAN}============================================${NC}"
+echo -e "${CYAN}   Notes Express App - Complete Setup       ${NC}"
+echo -e "${CYAN}============================================${NC}"
 echo ""
 
 # ----------------------------
-# Step 1: Install Docker
+# Step 1: System Update
 # ----------------------------
-echo -e "${YELLOW}[1/6] Checking Docker...${NC}"
+echo -e "${YELLOW}[1/5] Updating system packages...${NC}"
+sudo apt-get update -y
+sudo apt-get upgrade -y
+echo -e "${GREEN}  ✔ System updated.${NC}"
+echo ""
+
+# ----------------------------
+# Step 2: Install Docker
+# ----------------------------
+echo -e "${YELLOW}[2/5] Installing Docker...${NC}"
 
 if command -v docker &> /dev/null; then
     echo -e "${GREEN}  ✔ Docker is already installed.${NC}"
 else
-    echo -e "${YELLOW}  ⏳ Installing Docker...${NC}"
-    sudo apt-get update -y
     sudo apt-get install -y ca-certificates curl gnupg lsb-release
 
     # Add Docker's official GPG key
@@ -51,7 +59,7 @@ else
     sudo apt-get update -y
     sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-    # Add current user to docker group (so no sudo needed next time)
+    # Add current user to docker group
     sudo usermod -aG docker $USER
 
     # Start and enable Docker
@@ -63,91 +71,76 @@ fi
 echo ""
 
 # ----------------------------
-# Step 2: Check Docker Compose
+# Step 3: Configure .env for RDS
 # ----------------------------
-echo -e "${YELLOW}[2/6] Checking Docker Compose...${NC}"
-
-if docker compose version &> /dev/null; then
-    echo -e "${GREEN}  ✔ Docker Compose (plugin) is available.${NC}"
-    COMPOSE_CMD="docker compose"
-elif command -v docker-compose &> /dev/null; then
-    echo -e "${GREEN}  ✔ Docker Compose (standalone) is available.${NC}"
-    COMPOSE_CMD="docker-compose"
-else
-    echo -e "${YELLOW}  ⏳ Installing Docker Compose standalone...${NC}"
-    sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    sudo chmod +x /usr/local/bin/docker-compose
-    COMPOSE_CMD="docker-compose"
-    echo -e "${GREEN}  ✔ Docker Compose installed.${NC}"
-fi
-echo ""
-
-# ----------------------------
-# Step 3: Setup .env file
-# ----------------------------
-echo -e "${YELLOW}[3/6] Setting up environment file...${NC}"
+echo -e "${YELLOW}[3/5] Configuring .env file...${NC}"
 
 if [ ! -f .env ]; then
-    if [ -f .env.example ]; then
-        cp .env.example .env
-        echo -e "${GREEN}  ✔ Created .env from .env.example.${NC}"
-        echo -e "${YELLOW}  ⚠ Edit .env with your database credentials (DB_HOST, DB_USER, DB_PASS, DB_DATABASE).${NC}"
-    else
-        echo -e "${RED}Error: .env.example not found.${NC}"
-        exit 1
-    fi
+    cp .env.example .env
+    echo -e "${GREEN}  ✔ Created .env from .env.example.${NC}"
 else
     echo -e "${GREEN}  ✔ .env file already exists.${NC}"
 fi
+
+echo ""
+echo -e "${CYAN}  Please enter your RDS credentials:${NC}"
+echo ""
+
+read -p "  RDS Endpoint (host): " RDS_HOST
+read -p "  RDS Username [root]: " RDS_USER
+RDS_USER=${RDS_USER:-root}
+read -sp "  RDS Password: " RDS_PASS
+echo ""
+read -p "  Database name [notes]: " RDS_DB
+RDS_DB=${RDS_DB:-notes}
+
+cat > .env << EOF
+KEY="jhbjsagasdlkzxmdch892374anmsdad"
+APP_PORT=${APP_PORT}
+DB_HOST="${RDS_HOST}"
+DB_USER="${RDS_USER}"
+DB_PASS="${RDS_PASS}"
+DB_DATABASE="${RDS_DB}"
+EOF
+
+echo -e "${GREEN}  ✔ .env configured with RDS credentials.${NC}"
 echo ""
 
 # ----------------------------
-# Step 4: Install npm dependencies
+# Step 4: Build and start container
 # ----------------------------
-echo -e "${YELLOW}[4/6] Installing npm dependencies...${NC}"
+echo -e "${YELLOW}[4/5] Building and starting app container...${NC}"
 
-if command -v node &> /dev/null; then
-    echo -e "${GREEN}  ✔ Node.js $(node -v) found.${NC}"
-else
-    echo -e "${YELLOW}  ⏳ Installing Node.js...${NC}"
-    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-    sudo apt-get install -y nodejs
-    echo -e "${GREEN}  ✔ Node.js installed.${NC}"
-fi
+sudo docker compose up -d --build
 
-npm install
-echo -e "${GREEN}  ✔ npm dependencies installed.${NC}"
+echo -e "${GREEN}  ✔ App container is running.${NC}"
 echo ""
 
 # ----------------------------
-# Step 5: Build and start app
+# Step 5: Run DB table setup
 # ----------------------------
-echo -e "${YELLOW}[5/6] Building and starting the app container...${NC}"
-sudo $COMPOSE_CMD up -d --build
-echo -e "${GREEN}  ✔ App container started.${NC}"
-echo ""
+echo -e "${YELLOW}[5/5] Creating tables on RDS...${NC}"
+sleep 5
+sudo docker compose exec -T app npm run setup
 
-# ----------------------------
-# Step 6: Run DB setup
-# ----------------------------
-echo -e "${YELLOW}[6/6] Running database setup...${NC}"
-sleep 5  # Give the app a moment to start
-sudo $COMPOSE_CMD exec -T app npm run setup
-echo -e "${GREEN}  ✔ Database tables created.${NC}"
+echo -e "${GREEN}  ✔ Database tables created on RDS.${NC}"
 echo ""
 
 # ----------------------------
 # Done!
 # ----------------------------
-echo -e "${CYAN}========================================${NC}"
-echo -e "${GREEN}  ✔ Setup complete!${NC}"
-echo -e "${CYAN}========================================${NC}"
+echo -e "${CYAN}============================================${NC}"
+echo -e "${GREEN}  ✔ SETUP COMPLETE!${NC}"
+echo -e "${CYAN}============================================${NC}"
 echo ""
-echo -e "  App running at:  ${GREEN}http://localhost:3000${NC}"
+echo -e "  🌐 App running at:  ${GREEN}http://localhost:${APP_PORT}${NC}"
+echo ""
+echo -e "  📌 Make sure port ${APP_PORT} is open in your"
+echo -e "     AWS Security Group (Inbound Rules)."
 echo ""
 echo -e "  Useful commands:"
-echo -e "    ${CYAN}make logs${NC}      - View logs"
-echo -e "    ${CYAN}make down${NC}      - Stop container"
-echo -e "    ${CYAN}make restart${NC}   - Restart container"
-echo -e "    ${CYAN}make shell${NC}     - Shell into app container"
+echo -e "    ${CYAN}sudo docker compose logs -f${NC}        - View logs"
+echo -e "    ${CYAN}sudo docker compose down${NC}           - Stop container"
+echo -e "    ${CYAN}sudo docker compose restart${NC}        - Restart"
+echo -e "    ${CYAN}sudo docker compose exec app sh${NC}    - Shell into container"
 echo ""
